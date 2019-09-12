@@ -1,0 +1,343 @@
+<project name="svn_merge" default="Default">
+	<description>
+		Project for svn merges
+	</description>
+	<property environment="env"/>
+	<taskdef resource="net/sf/antcontrib/antlib.xml" classpath="${env.ANT_HOME}/lib/ant-contrib-1.0b3.jar"/>
+	<import file="../Ant_Common/svn.xml"/>
+	<import file="../Ant_Common/dlh.xml"/>
+	<!--*******************************************************************************************-->
+	<target name="Default">
+		<fail message="Please call the targets exactly!"/>
+	</target>
+	<!--*******************************************************************************************-->
+	<target name="merge_auto_launch">
+		<echo message="Launching merge for: ${env.SVN_LATEST_DIR}"/>
+		<svn_export remote.path="${env.SVN_MAIN_URL}/${env.SVN_LATEST_DIR}/ReleaseNotes-baseline-info.txt" local.path="${env.WORKSPACE}/ReleaseNotes-baseline-info.txt"/>
+		<property name="H.Version" value="${env.SVN_LATEST_DIR}"/>
+		<propertyfile file="${env.WORKSPACE}/h_version.properties">
+			<entry key="H.Version" operation="=" value="${env.SVN_LATEST_DIR}"/>
+		</propertyfile>
+		<echo message=""/>
+		<echo message="comparing last merged H-Version:"/>
+		<harvester_checkout_wo_ext remote.path="https://cns3-certs.joomo.de/svn/cns3extern/hmi/branches/teams/Integration_CNS/JenkinsAutoMerge" local.path="${Local.Path}/lastMergedVersions"/>
+		<loadproperties srcFile="${Local.Path}/lastMergedVersions/${PRL.name}.version"/>
+		<if>
+			<not>
+				<equals arg1="${last_version}" arg2="${env.SVN_LATEST_DIR}"/>
+			</not>
+			<then>
+				<echo message="Last merged version '${last_version}' is different than actual version '${env.SVN_LATEST_DIR}'. We have to start the merge..."/>
+				<propertyfile file="${Local.Path}/lastMergedVersions/${PRL.name}.version">
+					<entry key="last_version" value="${env.SVN_LATEST_DIR}"/>
+				</propertyfile>
+				<svn_commit local.path="${Local.Path}/lastMergedVersions" commit.message="NRN=remembering last merged version ${env.SVN_LATEST_DIR}"/>
+				<delete dir="${Local.Path}/POMs"/>
+			</then>
+			<else>
+				<if>
+					<equals arg1="${skip.H.Version.Check}" arg2="true"/>
+					<then>
+						<echo message="Last merged version '${last_version}' is the same like actual version '${env.SVN_LATEST_DIR}'. But 'skip.H.Version.Check=${skip.H.Version.Check}'. Therefore the merge will be triggered"/>
+					</then>
+					<else>
+						<echo message="Last merged version '${last_version}' is the same like actual version '${env.SVN_LATEST_DIR}'. We don't have to start the merge..."/>
+					</else>
+				</if>
+			</else>
+		</if>
+		
+	</target>
+	<!--*******************************************************************************************-->
+	<target name="Cleanup">
+		<if>
+			<istrue value="${cleanup}"/>
+			<then>
+				<echo message="deleting working folder '${Local.Path} ...'"/>
+				<delete dir="${Local.Path}"/>
+			</then>
+			<else>
+				<echo message="cleanup skipped ..."/>
+			</else>
+		</if>
+	</target>
+	<!--*******************************************************************************************-->
+	<target name="Checkout">
+		<echo message="checkout source for merge..."/>
+		<harvester_checkout_wo_ext remote.path="${Merge.Source.Url}" local.path="${Local.Path}/source"/>
+		<echo message=""/>
+		<echo message="checkout target for merge..."/>
+		<harvester_checkout_wo_ext remote.path="${Merge.Target.Url}" local.path="${Local.Path}/target"/>
+		<echo message=""/>
+		<echo message="checkout poms for testing..."/>
+		<trycatch property="fail.error.message">
+			<try>
+				<harvester_checkout_wo_ext remote.path="${POMs.url}" local.path="${Local.Path}/../POMs"/>
+			</try>
+			<catch>
+						<echo message="Error while checkout of POMs, will try to switch them."/>
+						<harvester_switch_wo_ext remote.path="${POMs.url}" local.path="${Local.Path}/../POMs"/>
+			</catch>
+		</trycatch>
+		<echo message=""/>
+		<if>
+			<equals arg1="${link.POMs.oneLevelDeeper}" arg2="true"/>
+			<then>
+				<echo message="link Poms one level deeper, because link.POMs.oneLevelDeeper=${link.POMs.oneLevelDeeper}"/>
+				<echo message="   link source: ${Local.Path}\..\POMs"/>
+				<echo message="   link dest: ${Local.Path}"/>
+				<echo message="   correcting urls"/>
+				<propertyregex property="Local.Path" input="${Local.Path}" regexp="/" replace="\\\" override="true"/>
+				<echo message="   link source mod: ${Local.Path}\..\POMs"/>
+				<echo message="   link dest mod: ${Local.Path}"/>
+				<echo message=""/>
+				<exec executable="cmd" failonerror="true">
+					<arg value="/c"/>
+					<arg value="mklink"/>
+					<arg value="/J"/>
+					<arg value="${Local.Path}\POMs"/>
+					<arg value="${Local.Path}\..\POMs"/>
+				</exec>
+			</then>
+			<else>
+				<echo message="DO NOT link Poms one level deeper, because link.POMs.oneLevelDeeper=${link.POMs.oneLevelDeeper}"/>
+			</else>
+		</if>
+	</target>
+	<!--*******************************************************************************************-->
+	<target name="Merge">
+		<if>
+			<or>
+				<isfalse value="${skip.merge.conflicts}"/>
+				<istrue value="{force.merge}"/>
+			</or>
+			<then>
+				<echo message="testing merge conflicts, cause skip.merge.conflicts = ${skip.merge.conflicts} ..."/>
+				<svn_merge_dry source.path="${Local.Path}/source" target.path="${Local.Path}/target"/>
+				<svn_status path="${Local.Path}/target" output.property="status.log"/>
+				<echo message="status log:"/>
+				<echo message="${status.log}"/>
+				<if>
+					<contains string="${status.log}" substring=" C "/>
+					<then>
+						<fail message="The merge seems to contain conflicts! Please check them manually"/>
+					</then>
+					<else>
+						<echo message="The merge seems not to contain conflicts."/>
+					</else>
+				</if>
+			</then>
+			<else>
+				<echo message="testing merge conflicts skipped, cause skip.merge.conflicts = ${skip.merge.conflicts} ..."/>
+			</else>
+		</if>
+		<echo message=""/>
+		<svn_merge source.path="${Local.Path}/source" target.path="${Local.Path}/target"/>
+	</target>
+	<!--*******************************************************************************************-->
+	<target name="Test">
+		<property name="pomspath" value=""/>
+		<for list="${projects.to.test}" param="project">
+			<sequential>
+				<if>
+					<equals arg1="${projects.to.test}" arg2="-self-"/>
+					<then>
+						<alterproperty property="pomspath" value="${Local.Path}/target/pom.xml"/>
+					</then>
+					<elseif>
+						<equals arg1="${projects.to.test}" arg2="-aggregates-"/>
+						<then>
+							<alterproperty property="pomspath" value="${Local.Path}/target/Aggregates/Install/pom.xml"/>
+						</then>
+					</elseif>
+					<else>
+						<alterproperty property="pomspath" value="${Local.Path}/target/@{project}/pom.xml"/>
+					</else>
+				</if>
+				<echo message=""/>
+					<echo message="testing 'mvn install' on: @{project}"/>
+					<trycatch property="fail.error.message">
+						<try>
+							<exec executable="cmd" failonerror="true">
+								<arg value="/c"/>
+								<arg value="call"/>
+								<arg value="mvn3.bat"/>
+								<arg value="install"/>
+								<arg value="-B"/>
+								<arg value="-f${pomspath}"/>
+								<arg value="-Dmaven.test.skip=true"/>
+								<arg value="-Dmaven.repo.local=${Local.Path}/.repo"/>
+							</exec>
+						</try>
+					<catch>
+						<fail message="Error while testing 'mvn install' on: '@{project}' - ${fail.error.message}${line.separator}"/>
+					</catch>
+				</trycatch>
+			</sequential>
+		</for>
+		<for list="${projects.to.test}" param="project">
+			<sequential>
+				<if>
+					<equals arg1="${projects.to.test}" arg2="-self-"/>
+					<then>
+						<alterproperty property="pomspath" value="${Local.Path}/target/pom.xml"/>
+					</then>
+					<elseif>
+						<equals arg1="${projects.to.test}" arg2="-aggregates-"/>
+						<then>
+							<alterproperty property="pomspath" value="${Local.Path}/target/Aggregates/Test/pom.xml"/>
+						</then>
+					</elseif>
+					<else>
+						<alterproperty property="pomspath" value="${Local.Path}/target/@{project}/pom.xml"/>
+					</else>
+				</if>
+					<echo message=""/>
+					<echo message="testing 'mvn test' on: @{project}"/>
+					<trycatch property="fail.error.message">
+						<try>
+							<exec executable="cmd" failonerror="true">
+								<arg value="/c"/>
+								<arg value="call"/>
+								<arg value="mvn3.bat"/>
+								<arg value="test"/>
+								<arg value="-B"/>
+								<arg value="-f${pomspath}"/>
+								<arg value="-Dmaven.repo.local=${Local.Path}/.repo"/>
+							</exec>
+						</try>
+					<catch>
+						<fail message="Error while testing 'mvn test' on ' @{project}' - ${fail.error.message}${line.separator}"/>
+					</catch>	
+				</trycatch>
+			</sequential>
+		</for>
+		<!--added aditional step for clean up all the mvn stuff, befor committing. It seems that the old TPL merge committed all the mvn stuff-->
+		<!--removed, because we need a clean merge after test, because test may add some file which may be commited eg xsd was a problem for AA-Usermanagment-->
+		<!--for list="${projects.to.test}" param="project">
+			<sequential>
+				<if>
+					<equals arg1="${projects.to.test}" arg2="-self-"/>
+					<then>
+						<alterproperty property="pomspath" value="${Local.Path}/target/pom.xml"/>
+					</then>
+					<elseif>
+						<equals arg1="${projects.to.test}" arg2="-aggregates-"/>
+						<then>
+							<alterproperty property="pomspath" value="${Local.Path}/target/Aggregates/Install/pom.xml"/>
+						</then>
+					</elseif>
+					<else>
+						<alterproperty property="pomspath" value="${Local.Path}/target/@{project}/pom.xml"/>
+					</else>
+				</if>
+				<echo message=""/>
+					<echo message="testing 'mvn clean' on: @{project}"/>
+					<trycatch property="fail.error.message">
+						<try>
+							<exec executable="cmd" failonerror="true">
+								<arg value="/c"/>
+								<arg value="call"/>
+								<arg value="mvn3.bat"/>
+								<arg value="clean"/>
+								<arg value="-B"/>
+								<arg value="-f${pomspath}"/>
+								<arg value="-Dmaven.test.skip=true"/>
+								<arg value="-Dmaven.repo.local=${Local.Path}/.repo"/>
+							</exec>
+						</try>
+					<catch>
+						<fail message="Error while testing 'mvn clean' on ' @{project}' - ${fail.error.message}${line.separator}"/>
+					</catch>
+				</trycatch>
+			</sequential>
+		</for-->
+	</target>
+	<!--*******************************************************************************************-->
+	<target name="CleanMerge">
+		
+		<echo message="   svn_revert..."/>
+		<svn_revert path="${Local.Path}/target"/>
+		
+		<echo message="   svn_cleanup..."/>
+		<svn_cleanup path="${Local.Path}/target"/>
+		
+		<echo message="   deleting..."/>
+		<delete includeEmptyDirs="true">
+			<fileset dir="${Local.Path}" includes="**/target/"/>
+		</delete>
+		
+		<echo message=""/>
+		<echo message="   updating..."/>
+		<svn_update_wo_ext path="${Local.Path}/target"/>
+		
+		<echo message=""/>
+		<echo message="   merging..."/>
+		<svn_merge source.path="${Local.Path}/source" target.path="${Local.Path}/target"/>
+	</target>
+	<!--*******************************************************************************************-->
+	<target name="Commit">
+		<svn_status path="${Local.Path}/target"/>
+		<if>
+			<istrue value="${commit}"/>
+			<then>
+				<echo message="committing ..."/>
+				<svn_commit local.path="${Local.Path}/target" commit.message="NRN=jenkins-auto-merge from ${Merge.Source.Url} to ${Merge.Target.Url}" sync="true"/>
+			</then>
+			<else>
+				<echo message="commit skipped ..."/>
+			</else>
+		</if>
+	</target>
+	<!--*******************************************************************************************-->
+	<target name="GetIntegratedComponent">
+	<!--dir="D:\scripts\svn-merge-tool"-->
+	<!--output="test.txt"-->
+		<exec executable="python" failonerror="true" output="${env.WORKSPACE}/test.txt" error="error.txt">
+			<arg line='merge.py "${release.notes.path}" ${config.file} ${source.url.rev} ${target.url.rev}' />
+		</exec>
+		<loadfile property="mytext" srcFile="${env.WORKSPACE}/test.txt"/> 
+		<echo>${mytext}</echo> 
+	</target>
+	<!--*******************************************************************************************-->
+	<target name="MergeDecider">
+		<echo message="checking if the mentioned tag has been merged allready..."/>
+		<echo message="   ${Project.Name} for ${PRL.name}"/>
+		<echo message="   source url: ${Merge.Source.Url}"/>
+		<svn_get_rev_from_url url="${Merge.Source.Url}" out.prop="source.url.rev"/>
+		<echo message="      rev: ${source.url.rev}"/>
+		<echo message="   target url: ${Merge.Target.Url}"/>
+		<svn_get_property svn.path="${Merge.Target.Url}" svn.prop.name="auto-merge-last-merged-rev" external.prop="target.url.rev"/>
+		<echo message="      rev: ${target.url.rev}"/>
+		<if>
+			<equals arg1="${target.url.rev}" arg2="${source.url.rev}"/>
+			<then>
+				<echo message="The revisions are equal, we don't have to do the merge!"/>
+				<!--do not change next line. Text will parsed from jenkins job directly to mark build as stable/unstable-->
+				<echo message="will mark this build step as unstable for preventing running following steps"/>
+			</then>
+			<else>
+				<echo message="The revisions are NOT equal, so let's do the merge!"/>
+			</else>
+		</if>
+	</target>
+	<!--*******************************************************************************************-->
+	<target name="RememberRevision">
+		<if>
+			<istrue value="${commit}"/>
+			<then>
+				<echo message="committing ..."/>
+				<echo message="Remember revision from last merged tag..."/>
+				<echo message="   ${Project.Name} for ${PRL.name}"/>
+				<echo message="   from source url: ${Merge.Source.Url}"/>
+				<svn_get_rev_from_url url="${Merge.Source.Url}" out.prop="source.url.rev"/>
+				<echo message="      rev: ${source.url.rev}"/>
+				<echo message="   to: ${Merge.Target.Url} in property 'auto-merge-last-merged-rev'"/>
+				<harvester_set_property svn.path="${Merge.Target.Url}" svn.prop.name="auto-merge-last-merged-rev" prop.value="${source.url.rev}" commit.message="NRN=JenkinsAutoMerge: remembering last merged revision"/>
+			</then>
+			<else>
+				<echo message="Remembering last merged revision SKIPPED..."/>
+			</else>
+		</if>
+	</target>
+</project>
